@@ -1,0 +1,612 @@
+openapi: 3.0.3
+info:
+  title: Onboardly API
+  description: Client Onboarding Automation for Freelancers
+  version: 1.0.0
+  contact:
+    name: Onboardly Support
+    email: support@onboardly.io
+
+servers:
+  - url: https://api.onboardly.io/v1
+    description: Production
+  - url: http://localhost:3001/v1
+    description: Local development
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        message: { type: string }
+      required: [error, message]
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        name: { type: string }
+        plan: { type: string, enum: [free, starter, pro] }
+        trial_ends_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    Client:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        company: { type: string, nullable: true }
+        phone: { type: string, nullable: true }
+        status: { type: string, enum: [new, active, completed, archived] }
+        onboarding_stage: { type: string, enum: [intake, documents, review, complete] }
+        notes: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Workflow:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        steps: { type: array, items: { type: object } }
+        is_default: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    OnboardingRun:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        client_id: { type: string, format: uuid }
+        workflow_id: { type: string, format: uuid }
+        current_step: { type: integer }
+        total_steps: { type: integer }
+        status: { type: string, enum: [in_progress, completed, abandoned] }
+        progress_pct: { type: integer, minimum: 0, maximum: 100 }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
+        client: { $ref: '#/components/schemas/Client' }
+        workflow: { $ref: '#/components/schemas/Workflow' }
+
+    Document:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        onboarding_run_id: { type: string, format: uuid }
+        type: { type: string, enum: [contract, nda, questionnaire, proposal, invoice] }
+        title: { type: string }
+        status: { type: string, enum: [pending, sent, viewed, signed, rejected] }
+        file_url: { type: string, nullable: true }
+        sent_at: { type: string, format: date-time, nullable: true }
+        signed_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    Pagination:
+      type: object
+      properties:
+        total: { type: integer }
+        page: { type: integer }
+        per_page: { type: integer }
+        total_pages: { type: integer }
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ── AUTH ──────────────────────────────────────────────────
+  /auth/register:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Register new account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                name: { type: string }
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  user: { $ref: '#/components/schemas/User' }
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  user: { $ref: '#/components/schemas/User' }
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+
+  # ── CLIENTS ───────────────────────────────────────────────
+  /clients:
+    get:
+      tags: [Clients]
+      summary: List clients
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [new, active, completed, archived] }
+        - name: search
+          in: query
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        '200':
+          description: Client list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Client' } }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+
+    post:
+      tags: [Clients]
+      summary: Create client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                company: { type: string }
+                phone: { type: string }
+                notes: { type: string }
+      responses:
+        '201':
+          description: Client created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Client' }
+
+  /clients/{id}:
+    get:
+      tags: [Clients]
+      summary: Get client
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Client details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Client' }
+
+    patch:
+      tags: [Clients]
+      summary: Update client
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                company: { type: string }
+                phone: { type: string }
+                status: { type: string, enum: [new, active, completed, archived] }
+                notes: { type: string }
+      responses:
+        '200':
+          description: Client updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Client' }
+
+    delete:
+      tags: [Clients]
+      summary: Delete client
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Deleted
+
+  # ── WORKFLOWS ─────────────────────────────────────────────
+  /workflows:
+    get:
+      tags: [Workflows]
+      summary: List workflows
+      responses:
+        '200':
+          description: Workflow list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Workflow' } }
+
+    post:
+      tags: [Workflows]
+      summary: Create workflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, steps]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                steps: { type: array, items: { type: object } }
+                is_default: { type: boolean }
+      responses:
+        '201':
+          description: Workflow created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workflow' }
+
+  /workflows/{id}:
+    get:
+      tags: [Workflows]
+      summary: Get workflow
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Workflow
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workflow' }
+
+    patch:
+      tags: [Workflows]
+      summary: Update workflow
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                steps: { type: array, items: { type: object } }
+                is_default: { type: boolean }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workflow' }
+
+    delete:
+      tags: [Workflows]
+      summary: Delete workflow
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Deleted
+
+  # ── ONBOARDING RUNS ───────────────────────────────────────
+  /runs:
+    get:
+      tags: [Onboarding]
+      summary: List onboarding runs
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [in_progress, completed, abandoned] }
+        - name: client_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Runs list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/OnboardingRun' } }
+
+    post:
+      tags: [Onboarding]
+      summary: Start onboarding run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_id, workflow_id]
+              properties:
+                client_id: { type: string, format: uuid }
+                workflow_id: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Run started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OnboardingRun' }
+
+  /runs/{id}:
+    get:
+      tags: [Onboarding]
+      summary: Get run details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Run details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OnboardingRun' }
+
+  /runs/{id}/advance:
+    post:
+      tags: [Onboarding]
+      summary: Advance to next step
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Step advanced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OnboardingRun' }
+
+  /runs/{id}/complete:
+    post:
+      tags: [Onboarding]
+      summary: Mark run as complete
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Run completed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OnboardingRun' }
+
+  # ── DOCUMENTS ─────────────────────────────────────────────
+  /runs/{runId}/documents:
+    get:
+      tags: [Documents]
+      summary: List documents for a run
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Documents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Document' } }
+
+    post:
+      tags: [Documents]
+      summary: Add document to run
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, title]
+              properties:
+                type: { type: string, enum: [contract, nda, questionnaire, proposal, invoice] }
+                title: { type: string }
+                content: { type: object }
+      responses:
+        '201':
+          description: Document added
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
+
+  /documents/{id}/send:
+    post:
+      tags: [Documents]
+      summary: Send document to client
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Document sent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
+
+  /documents/{id}/sign:
+    post:
+      tags: [Documents]
+      summary: Mark document as signed (webhook from e-sign provider)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Document signed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
+
+  # ── BILLING ───────────────────────────────────────────────
+  /billing/checkout:
+    post:
+      tags: [Billing]
+      summary: Create Stripe checkout session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan]
+              properties:
+                plan: { type: string, enum: [starter, pro] }
+      responses:
+        '200':
+          description: Checkout URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checkout_url: { type: string, format: uri }
+
+  /billing/portal:
+    post:
+      tags: [Billing]
+      summary: Open Stripe customer portal
+      responses:
+        '200':
+          description: Portal URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  portal_url: { type: string, format: uri }
+
+  /webhooks/stripe:
+    post:
+      tags: [Billing]
+      security: []
+      summary: Stripe webhook handler
+      responses:
+        '200':
+          description: Acknowledged
+
+  # ── DASHBOARD ─────────────────────────────────────────────
+  /dashboard/stats:
+    get:
+      tags: [Dashboard]
+      summary: Get dashboard statistics
+      responses:
+        '200':
+          description: Stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_clients: { type: integer }
+                  active_runs: { type: integer }
+                  completed_this_month: { type: integer }
+                  avg_completion_days: { type: number }
+                  pending_documents: { type: integer }
+                  completion_rate: { type: number }
