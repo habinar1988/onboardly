@@ -1,0 +1,24 @@
+# Railway deployment config
+# Deploy at: railway.app
+
+[build]
+builder = "nixpacks"
+
+[[services]]
+name = "api"
+source = "apps/api"
+startCommand = "node dist/index.js"
+buildCommand = "npm install && npm run build"
+
+[services.variables]
+PORT = "3001"
+NODE_ENV = "production"
+
+[[services]]
+name = "web"
+source = "apps/web"
+startCommand = "npm run start"
+buildCommand = "npm install && npm run build"
+
+[services.variables]
+NODE_ENV = "production"
